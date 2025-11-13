@@ -1,50 +1,125 @@
-# VoterV3.sol Function-Level Documentation
+# VoterV3.sol - In-Depth Analysis
 
-This document provides a detailed explanation of the functions in the `VoterV3.sol` contract.
-
-## `createGauge(address _pool, uint256 _gaugeType)`
-
--   **Purpose:** This function allows anyone to create a new gauge for a specific liquidity pool. Gauges are responsible for distributing `THE` emissions to liquidity providers.
--   **Parameters:**
-    -   `_pool`: The address of the liquidity pool.
-    -   `_gaugeType`: The type of gauge to create (e.g., for a stable or volatile pool).
--   **Returns:** The address of the newly created gauge, its internal bribe contract, and its external bribe contract.
--   **Interaction:** This function interacts with a `GaugeFactory` to create the gauge and a `BribeFactory` to create the associated bribe contracts. It also requires that the tokens in the pool are whitelisted.
+This document provides a detailed, line-by-line analysis of the core functions in the `VoterV3.sol` contract.
 
 ## `vote(uint256 _tokenId, address[] calldata _poolVote, uint256[] calldata _weights)`
 
--   **Purpose:** This is the core function for gauge voting. It allows `veTHE` holders to allocate their voting power to different gauges, thereby influencing the distribution of `THE` emissions.
--   **Parameters:**
-    -   `_tokenId`: The ID of the `veTHE` NFT to vote with.
-    -   `_poolVote`: An array of pool addresses to vote for.
-    -   `_weights`: An array of weights (in basis points) corresponding to the pools. The total weight must sum to 10,000.
--   **Interaction:** This function interacts with the `VotingEscrow` contract to get the voting power of the NFT. It also interacts with the `Bribes` contracts to deposit the user's vote, making them eligible for bribe rewards.
+This is the central function that allows `veTHE` holders to direct the flow of `THE` emissions to their preferred liquidity pools.
 
-## `claimBribes(address[] memory _bribes, address[][] memory _tokens, uint256 _tokenId)`
+```solidity
+function vote(uint256 _tokenId, address[] calldata _poolVote, uint256[] calldata _weights) external nonReentrant {
+    // 1. _voteDelay(_tokenId);
+    //    Checks if the user has voted recently, enforcing a cooldown period between votes to prevent spamming.
+    _voteDelay(_tokenId);
 
--   **Purpose:** This function allows `veTHE` holders to claim the bribe rewards they have earned by voting for certain gauges.
--   **Parameters:**
-    -   `_bribes`: An array of bribe contract addresses to claim from.
-    -   `_tokens`: A 2D array of token addresses to claim rewards for.
-    -   `_tokenId`: The ID of the `veTHE` NFT.
--   **Interaction:** This function interacts with the `Bribes` contracts to withdraw the user's earned rewards.
+    // 2. require(IVotingEscrow(_ve).isApprovedOrOwner(msg.sender, _tokenId), "!approved/Owner");
+    //    Ensures that the caller is the owner of the veTHE NFT or has been approved to vote on its behalf.
+    require(IVotingEscrow(_ve).isApprovedOrOwner(msg.sender, _tokenId), "!approved/Owner");
+
+    // 3. require(_poolVote.length == _weights.length, "Pool/Weights length !=");
+    //    Validates that the number of pools and the number of weights provided are equal.
+    require(_poolVote.length == _weights.length, "Pool/Weights length !=");
+
+    // 4. _vote(_tokenId, _poolVote, _weights);
+    //    Calls the internal `_vote` function to handle the core voting logic.
+    _vote(_tokenId, _poolVote, _weights);
+
+    // 5. lastVoted[_tokenId] = _epochTimestamp() + 1;
+    //    Records the timestamp of the vote to enforce the voting delay.
+    lastVoted[_tokenId] = _epochTimestamp() + 1;
+}
+
+function _vote(uint256 _tokenId, address[] memory _poolVote, uint256[] memory _weights) internal {
+    // 1. _reset(_tokenId);
+    //    Before applying new votes, this line calls the internal `_reset` function to clear all of the user's
+    //    previous votes for the given `_tokenId`. This ensures that each call to `vote` is a fresh allocation
+    //    of 100% of the NFT's voting power.
+    _reset(_tokenId);
+
+    // 2. uint256 _weight = IVotingEscrow(_ve).balanceOfNFT(_tokenId);
+    //    Fetches the current voting power (weight) of the user's `veTHE` NFT from the `VotingEscrow` contract.
+    uint256 _weight = IVotingEscrow(_ve).balanceOfNFT(_tokenId);
+
+    // 3. Loop to calculate `_totalVoteWeight`
+    //    This loop iterates through all the pools the user wants to vote for and sums up the weights
+    //    they've assigned. This total is used to normalize the weights.
+    //    ...
+
+    // 4. Loop to apply votes
+    //    This is the main loop where the votes are processed and recorded.
+    for (uint256 i = 0; i < _poolCnt; i++) {
+        // a. uint256 _poolWeight = _weights[i] * _weight / _totalVoteWeight;
+        //    Calculates the actual voting power to be allocated to the current pool. It's a fraction of the
+        //    NFT's total voting power, proportional to the weight assigned by the user.
+
+        // b. poolVote[_tokenId].push(_pool);
+        //    Records that this `_tokenId` has voted for this `_pool`.
+
+        // c. weightsPerEpoch[_time][_pool] += _poolWeight;
+        //    Adds the calculated `_poolWeight` to the total weight for the pool in the current epoch. This is
+        //    the value that will be used to determine the share of `THE` emissions.
+
+        // d. votes[_tokenId][_pool] += _poolWeight;
+        //    Records the specific amount of voting power the `_tokenId` has allocated to this `_pool`.
+
+        // e. IBribe(internal_bribes[_gauge]).deposit(uint256(_poolWeight), _tokenId);
+        //    Deposits the vote into the internal and external bribe contracts, making the user eligible
+        //    to claim bribe rewards.
+        //    ...
+    }
+
+    // 5. if (_usedWeight > 0) IVotingEscrow(_ve).voting(_tokenId);
+    //    If any votes were cast, it marks the `veTHE` NFT as having voted in the `VotingEscrow` contract.
+    //    This can be used to prevent certain actions (like transferring the NFT) while it has active votes.
+    if (_usedWeight > 0) IVotingEscrow(_ve).voting(_tokenId);
+
+    // 6. totalWeightsPerEpoch[_time] += _totalWeight;
+    //    Updates the total voting weight across all pools for the current epoch.
+    totalWeightsPerEpoch[_time] += _totalWeight;
+}
+```
 
 ## `distribute(address[] memory _gauges)`
 
--   **Purpose:** This function distributes `THE` emissions to a list of gauges. It is typically called once per epoch (week).
--   **Parameters:**
-    -   `_gauges`: An array of gauge addresses to distribute emissions to.
--   **Interaction:** This function is called by the `MinterUpgradeable` contract, which provides the `THE` tokens to be distributed. It then calls the `notifyRewardAmount` function on each gauge to send the rewards.
+This function is responsible for distributing the weekly `THE` emissions to the gauges.
 
-## `reset(uint256 _tokenId)`
+```solidity
+function distribute(address[] memory _gauges) external nonReentrant {
+    // 1. IMinter(minter).update_period();
+    //    Calls the `update_period` function on the `Minter` contract, which triggers the minting of
+    //    new `THE` tokens for the week.
+    IMinter(minter).update_period();
 
--   **Purpose:** This function allows a `veTHE` holder to reset their votes, effectively removing their voting power from all gauges they have voted for.
--   -   `_tokenId`: The ID of the `veTHE` NFT.
--   **Interaction:** This function interacts with the `Bribes` contracts to withdraw the user's vote.
+    // 2. for (uint256 x = 0; x < _gauges.length; x++) { _distribute(_gauges[x]); }
+    //    Loops through the provided list of gauges and calls the internal `_distribute` function for each one.
+    for (uint256 x = 0; x < _gauges.length; x++) {
+        _distribute(_gauges[x]);
+    }
+}
 
-## `poke(uint256 _tokenId)`
+function _distribute(address _gauge) internal {
+    // 1. _updateForAfterDistribution(_gauge);
+    //    Calculates the amount of `THE` rewards that the gauge is entitled to for the past epoch,
+    //    based on the votes it received. The result is stored in the `claimable` mapping.
+    _updateForAfterDistribution(_gauge);
 
--   **Purpose:** This function allows a `veTHE` holder to re-cast their votes with their current voting power. This is useful if they have increased their lock time or amount, as their voting power will have increased.
--   **Parameters:**
-    -   `_tokenId`: The ID of the `veTHE` NFT.
--   **Interaction:** This function is similar to `vote`, but it uses the user's existing vote distribution.
+    // 2. uint256 _claimable = claimable[_gauge];
+    //    Retrieves the calculated rewards for the gauge.
+    uint256 _claimable = claimable[_gauge];
+
+    // 3. if (_claimable > 0 && isAlive[_gauge]) { ... }
+    //    Checks if there are any rewards to distribute and if the gauge is active.
+    if (_claimable > 0 && isAlive[_gauge]) {
+        // a. claimable[_gauge] = 0;
+        //    Resets the claimable amount for the gauge.
+
+        // b. gaugesDistributionTimestmap[_gauge] = currentTimestamp;
+        //    Updates the timestamp of the last distribution for the gauge.
+
+        // c. IGauge(_gauge).notifyRewardAmount(base, _claimable);
+        //    Calls the `notifyRewardAmount` function on the `GaugeV2` contract, which sends the `THE`
+        //    rewards to the gauge, making them available for liquidity providers to claim.
+        IGauge(_gauge).notifyRewardAmount(base, _claimable);
+    }
+}
+```

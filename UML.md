@@ -76,12 +76,12 @@ classDiagram
         +rewardToken: address
         +deposit(uint256)
         +withdraw(uint256)
-        +getReward(address)
+        +getReward()
     }
 
     class Bribes {
-        +depositBribe(address, uint256)
-        +getReward(address)
+        +notifyRewardAmount(address, uint256)
+        +getReward(uint256, address[])
     }
 
     Thena "1" -- "1" VotingEscrow : locked for veTHE

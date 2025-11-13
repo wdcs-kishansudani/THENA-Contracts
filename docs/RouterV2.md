@@ -1,51 +1,103 @@
-# RouterV2.sol Function-Level Documentation
+# RouterV2.sol - In-Depth Analysis
 
-This document provides a detailed explanation of the functions in the `RouterV2.sol` contract.
+This document provides a detailed, line-by-line analysis of the core functions in the `RouterV2.sol` contract.
 
-## `addLiquidity(address tokenA, address tokenB, bool stable, uint amountADesired, uint amountBDesired, uint amountAMin, uint amountBMin, address to, uint deadline)`
+## `addLiquidity(address tokenA, address tokenB, bool stable, ...)`
 
--   **Purpose:** This function is the primary entry point for users to add liquidity to a pool. It handles the creation of the pair if it doesn't exist and the calculation of the optimal amounts of tokens to deposit.
--   **Parameters:**
-    -   `tokenA`: The address of the first token.
-    -   `tokenB`: The address of the second token.
-    -   `stable`: A boolean indicating whether the pool is for stable or volatile assets.
-    -   `amountADesired`: The desired amount of `tokenA` to add.
-    -   `amountBDesired`: The desired amount of `tokenB` to add.
-    -   `amountAMin`: The minimum amount of `tokenA` to add, which protects against slippage.
-    -   `amountBMin`: The minimum amount of `tokenB` to add, which protects against slippage.
-    -   `to`: The address to receive the liquidity tokens.
-    -   `deadline`: The deadline for the transaction.
--   **Returns:**
-    -   `amountA`: The amount of `tokenA` actually added.
-    -   `amountB`: The amount of `tokenB` actually added.
-    -   `liquidity`: The amount of LP tokens minted.
--   **Interaction:** This function interacts with the `PairFactory` to create the pair if necessary, and with the `Pair` contract to deposit the tokens and mint the LP tokens.
+This function is the main entry point for users to add liquidity to a pool.
 
-## `removeLiquidity(address tokenA, address tokenB, bool stable, uint liquidity, uint amountAMin, uint amountBMin, address to, uint deadline)`
+```solidity
+function addLiquidity(
+    address tokenA, address tokenB, bool stable,
+    uint amountADesired, uint amountBDesired,
+    uint amountAMin, uint amountBMin,
+    address to, uint deadline
+) external ensure(deadline) returns (uint amountA, uint amountB, uint liquidity) {
+    // 1. (amountA, amountB) = _addLiquidity(...);
+    //    Calls the internal `_addLiquidity` function to calculate the optimal amounts of tokens
+    //    to deposit, based on the current reserves of the pool. This prevents users from adding
+    //    liquidity at an unfavorable price.
+    (amountA, amountB) = _addLiquidity(tokenA, tokenB, stable, amountADesired, amountBDesired, amountAMin, amountBMin);
 
--   **Purpose:** This function is the primary entry point for users to remove liquidity from a pool.
--   **Parameters:**
-    -   `tokenA`: The address of the first token.
-    -   `tokenB`: The address of the second token.
-    -   `stable`: A boolean indicating whether the pool is for stable or volatile assets.
-    -   `liquidity`: The amount of LP tokens to burn.
-    -   `amountAMin`: The minimum amount of `tokenA` to receive, which protects against slippage.
-    -   `amountBMin`: The minimum amount of `tokenB` to receive, which protects against slippage.
-    -   `to`: The address to receive the underlying assets.
-    -   `deadline`: The deadline for the transaction.
--   **Returns:**
-    -   `amountA`: The amount of `tokenA` returned.
-    -   `amountB`: The amount of `tokenB` returned.
--   **Interaction:** This function interacts with the `Pair` contract to burn the LP tokens and withdraw the underlying assets.
+    // 2. address pair = pairFor(tokenA, tokenB, stable);
+    //    Calculates the deterministic address of the pair contract.
+    address pair = pairFor(tokenA, tokenB, stable);
 
-## `swapExactTokensForTokens(uint amountIn, uint amountOutMin, route[] calldata routes, address to, uint deadline)`
+    // 3. _safeTransferFrom(tokenA, msg.sender, pair, amountA); ...
+    //    Transfers the calculated amounts of tokens from the user to the pair contract.
+    _safeTransferFrom(tokenA, msg.sender, pair, amountA);
+    _safeTransferFrom(tokenB, msg.sender, pair, amountB);
 
--   **Purpose:** This function allows users to swap an exact amount of input tokens for a minimum amount of output tokens. It supports multi-hop swaps through an array of routes.
--   **Parameters:**
-    -   `amountIn`: The amount of input tokens.
-    -   `amountOutMin`: The minimum amount of output tokens to receive, which protects against slippage.
-    -   `routes`: An array of `route` structs, where each struct defines a single hop in the swap.
-    -   `to`: The address of the recipient.
-    -   `deadline`: The deadline for the transaction.
--   **Returns:** An array of amounts for each step of the swap.
--   **Interaction:** This function interacts with the `Pair` contracts for each hop in the route, calling the `swap` function on each one. It also handles the transfer of tokens between the pairs.
+    // 4. liquidity = IBaseV1Pair(pair).mint(to);
+    //    Calls the `mint` function on the pair contract, which mints new LP tokens and sends
+    //    them to the specified recipient (`to`).
+    liquidity = IBaseV1Pair(pair).mint(to);
+}
+```
+
+## `removeLiquidity(address tokenA, address tokenB, bool stable, ...)`
+
+This function is the main entry point for users to remove liquidity from a pool.
+
+```solidity
+function removeLiquidity(
+    address tokenA, address tokenB, bool stable,
+    uint liquidity, uint amountAMin, uint amountBMin,
+    address to, uint deadline
+) public ensure(deadline) returns (uint amountA, uint amountB) {
+    // 1. address pair = pairFor(tokenA, tokenB, stable);
+    //    Calculates the deterministic address of the pair contract.
+    address pair = pairFor(tokenA, tokenB, stable);
+
+    // 2. require(IBaseV1Pair(pair).transferFrom(msg.sender, pair, liquidity));
+    //    Transfers the user's LP tokens to the pair contract.
+    require(IBaseV1Pair(pair).transferFrom(msg.sender, pair, liquidity));
+
+    // 3. (uint amount0, uint amount1) = IBaseV1Pair(pair).burn(to);
+    //    Calls the `burn` function on the pair contract, which burns the LP tokens and returns
+    //    the underlying tokens to the specified recipient (`to`).
+    (uint amount0, uint amount1) = IBaseV1Pair(pair).burn(to);
+
+    // 4. (amountA, amountB) = tokenA == token0 ? (amount0, amount1) : (amount1, amount0);
+    //    Unsorts the token amounts to match the order of the tokens passed in as arguments.
+    (address token0,) = sortTokens(tokenA, tokenB);
+    (amountA, amountB) = tokenA == token0 ? (amount0, amount1) : (amount1, amount0);
+
+    // 5. require(amountA >= amountAMin, '...');
+    //    Checks that the amounts of tokens received are greater than or equal to the minimum
+    //    amounts specified by the user, protecting against slippage.
+    require(amountA >= amountAMin, 'BaseV1Router: INSUFFICIENT_A_AMOUNT');
+    require(amountB >= amountBMin, 'BaseV1Router: INSUFFICIENT_B_AMOUNT');
+}
+```
+
+## `swapExactTokensForTokens(uint amountIn, uint amountOutMin, route[] calldata routes, ...)`
+
+This function allows users to perform a multi-hop swap with a precise input amount.
+
+```solidity
+function swapExactTokensForTokens(
+    uint amountIn, uint amountOutMin,
+    route[] calldata routes,
+    address to, uint deadline
+) external ensure(deadline) returns (uint[] memory amounts) {
+    // 1. amounts = getAmountsOut(amountIn, routes);
+    //    Calculates the expected output amount for each hop in the swap route.
+    amounts = getAmountsOut(amountIn, routes);
+
+    // 2. require(amounts[amounts.length - 1] >= amountOutMin, '...');
+    //    Ensures that the final output amount is greater than or equal to the minimum amount
+    //    specified by the user.
+    require(amounts[amounts.length - 1] >= amountOutMin, 'BaseV1Router: INSUFFICIENT_OUTPUT_AMOUNT');
+
+    // 3. _safeTransferFrom(routes[0].from, msg.sender, pairFor(...), amounts[0]);
+    //    Transfers the input tokens from the user to the first pair in the route.
+    _safeTransferFrom(
+        routes[0].from, msg.sender, pairFor(routes[0].from, routes[0].to, routes[0].stable), amounts[0]
+    );
+
+    // 4. _swap(amounts, routes, to);
+    //    Calls the internal `_swap` function to execute the series of swaps between the pairs.
+    _swap(amounts, routes, to);
+}
+```
